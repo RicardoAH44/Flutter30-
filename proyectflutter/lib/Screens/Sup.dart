@@ -3,6 +3,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 
 void main() => runApp(const SupPage());
 
@@ -17,7 +18,8 @@ class _SupPageState extends State<SupPage> {
   late GoogleMapController mapController;
   Location location = Location();
   LatLng _currentLocation = LatLng(0.0, 0.0); // Ubicación inicial
-  Set<Marker> _markers = {}; // Set to store markers
+  Set<Marker> _markers = {}; // Conjunto de marcadores
+  Set<Polyline> _polylines = {}; // Conjunto de polilíneas para rutas
 
   @override
   void initState() {
@@ -34,7 +36,23 @@ class _SupPageState extends State<SupPage> {
       var userLocation = await location.getLocation();
       setState(() {
         _currentLocation = LatLng(userLocation.latitude!, userLocation.longitude!);
+
+        // Agregar un marcador personalizado para la ubicación del usuario
+        _markers.add(
+          Marker(
+            markerId: MarkerId('user_location'),
+            position: _currentLocation,
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+            infoWindow: InfoWindow(
+              title: 'Tu ubicación actual',
+            ),
+          ),
+        );
+
+        // Llama a la función para buscar hospitales después de obtener la ubicación
+        _searchNearbyHospitals();
       });
+
       mapController.animateCamera(
         CameraUpdate.newLatLng(
           LatLng(userLocation.latitude!, userLocation.longitude!),
@@ -46,8 +64,8 @@ class _SupPageState extends State<SupPage> {
   }
 
   Future<void> _searchNearbyHospitals() async {
-    final apiKey = 'AIzaSyDnVASaBzWWIx0ZaO5E5legQLNGrqMIztk'; // Replace with your API key
-    final radius = 10000; // Radius in meters to search for nearby hospitals (adjust as needed)
+    final apiKey = 'AIzaSyDnVASaBzWWIx0ZaO5E5legQLNGrqMIztk';
+    final radius = 10000;
     final type = 'hospital';
 
     final url =
@@ -59,10 +77,11 @@ class _SupPageState extends State<SupPage> {
       final Map<String, dynamic> data = json.decode(response.body);
       final List<dynamic> results = data['results'];
 
-      // Clear existing markers
-      _markers.clear();
+      // Limpia los marcadores existentes y las polilíneas
+      _markers.removeWhere((marker) => marker.markerId != MarkerId('user_location'));
+      _polylines.clear();
 
-      // Add new markers for hospitals
+      // Agrega nuevos marcadores para los hospitales
       results.forEach((hospital) {
         final name = hospital['name'];
         final lat = hospital['geometry']['location']['lat'];
@@ -77,14 +96,53 @@ class _SupPageState extends State<SupPage> {
             infoWindow: InfoWindow(
               title: name,
             ),
+            onTap: () {
+              _getDirections(hospitalLocation); // Cambia el nombre de la variable aquí
+            },
           ),
         );
       });
 
-      // Update the map to display the new markers
+      // Actualiza el mapa para mostrar los nuevos marcadores
       setState(() {});
     } else {
       throw Exception('Error al obtener hospitales cercanos');
+    }
+  }
+
+  Future<void> _getDirections(LatLng hospitalLocation) async { // Cambia el nombre de la variable aquí
+    final googleApiKey = 'AIzaSyDnVASaBzWWIx0ZaO5E5legQLNGrqMIztk'; // Reemplaza con tu clave de API de Google
+    final directionsApi = 'https://maps.googleapis.com/maps/api/directions/json?';
+
+    final origin = _currentLocation;
+    final destination = hospitalLocation; // Cambia el nombre de la variable aquí
+
+    final url = '$directionsApi'
+        'origin=${origin.latitude},${origin.longitude}&'
+        'destination=${destination.latitude},${destination.longitude}&'
+        'key=$googleApiKey';
+
+    final response = await http.get(Uri.parse(url));
+
+    if (response.statusCode == 200) {
+      final Map<String, dynamic> data = json.decode(response.body);
+      final List<dynamic> routes = data['routes'];
+      if (routes.isNotEmpty) {
+        final points = PolylinePoints().decodePolyline(routes[0]['overview_polyline']['points']);
+        List<LatLng> polylineCoordinates = [];
+        for (PointLatLng point in points) {
+          polylineCoordinates.add(LatLng(point.latitude, point.longitude));
+        }
+        // Agrega la ruta como una polilínea al conjunto de polilíneas
+        _polylines.add(Polyline(
+          polylineId: PolylineId('polyLineId'),
+          color: Colors.blue,
+          points: polylineCoordinates,
+          width: 5,
+        ));
+      }
+    } else {
+      throw Exception('Error al obtener direcciones');
     }
   }
 
@@ -93,7 +151,7 @@ class _SupPageState extends State<SupPage> {
     return MaterialApp(
       home: Scaffold(
         appBar: AppBar(
-          title: const Text('Mapa con Ubicación Actual'),
+          title: const Text('Mapa con Ubicación Actual y Hospitales Cercanos'),
           backgroundColor: Colors.green[700],
         ),
         body: Column(
@@ -103,14 +161,11 @@ class _SupPageState extends State<SupPage> {
                 onMapCreated: _onMapCreated,
                 initialCameraPosition: CameraPosition(
                   target: _currentLocation,
-                  zoom: 11.0,
+                  zoom: 15.0,
                 ),
-                markers: _markers, // Display markers from the set
+                markers: _markers,
+                polylines: _polylines, // Muestra las polilíneas en el mapa
               ),
-            ),
-            ElevatedButton(
-              onPressed: _searchNearbyHospitals,
-              child: Text('Buscar Hospitales Cercanos'),
             ),
           ],
         ),
